@@ -1,7 +1,7 @@
 {
   "name": "storybook-mcp-server",
-  "version": "2.0.0",
-  "description": "MCP server for integrating Storybook stories with React components",
+  "version": "3.0.0",
+  "description": "Advanced MCP server for Storybook with AST parsing, addon management, test generation, and interactive editing",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {

@@ -2,27 +2,36 @@
 
 A Model Context Protocol (MCP) server that enables AI assistants like Claude Code to seamlessly work with Storybook stories and React components.
 
-## 🎉 What's New in v2.0
+## 🎉 What's New in v3.0
 
-**AUTO-SYNC & VARIABLE UPDATES!** The server now automatically keeps your components and stories in sync:
+**AST PARSING, ADDON MANAGEMENT, TEST GENERATION & INTERACTIVE EDITING!**
 
-- ✅ **Validate sync** - Check if component props match story args
-- ✅ **Auto-update** - Sync props from story → component or component → story
-- ✅ **Find & replace** - Update variables across all files
-- ✅ **Bulk operations** - Check sync status for entire projects
+### v3.0 Features (NEW!)
+- 🔍 **AST-based parsing** - TypeScript Compiler API for accurate code analysis
+- 📦 **Addon management** - List, add, remove Storybook addons
+- 🧪 **Test generation** - Auto-generate Jest/Vitest tests + accessibility tests
+- ✏️ **Interactive editing** - Update story args, clone stories, batch operations
 
-👉 **[See all new features →](storybook-mcp-server/WHATS-NEW-V2.md)**
+### v2.0 Features
+- 🔁 **Auto-sync** - Keep components and stories in sync
+- 🔎 **Find & replace** - Update variables across files
+- ✅ **Bulk validation** - Check sync for entire projects
+
+👉 **[See v2.0 features →](storybook-mcp-server/WHATS-NEW-V2.md)**
 
 ## What is This?
 
 This repository contains a fully functional MCP server that bridges the gap between Storybook and React development. It allows Claude Code CLI to:
 
-- 📖 **Read and parse** Storybook story files
+- 📖 **Read and parse** Storybook story files (regex & AST)
 - 🔄 **Convert stories** to standalone React components
 - ✨ **Generate stories** from React components automatically
-- 🔍 **Extract metadata** about components, props, and controls
-- 🔁 **AUTO-SYNC** props between components and stories (v2.0!)
-- 🔎 **Find and replace** variables across multiple files (v2.0!)
+- 🔍 **Extract metadata** with TypeScript Compiler API
+- 🔁 **AUTO-SYNC** props between components and stories
+- 🔎 **Find and replace** variables across multiple files
+- 📦 **Manage addons** - list, add, remove Storybook addons (v3.0!)
+- 🧪 **Generate tests** - unit, integration, accessibility tests (v3.0!)
+- ✏️ **Edit interactively** - update args, clone stories, batch operations (v3.0!)
 - 🚀 **Automate workflows** like bulk story generation and validation
 
 ## Quick Start
@@ -75,26 +84,47 @@ Generate a Storybook story for the LoginForm component
 
 ## Features
 
-### 11 Powerful Tools (v2.0)
+### 16 Powerful Tools (v3.0)
 
-#### Basic Operations
+#### Basic Operations (6 tools)
 | Tool | Description |
 |------|-------------|
 | `list_stories` | Find all Storybook story files in a project |
-| `parse_story` | Extract metadata, component references, args, and argTypes |
-| `parse_component` | Extract prop types and component information |
-| `extract_story_props` | Get args and controls from story files |
-| `convert_story_to_component` | Convert Storybook stories → standalone React components |
-| `generate_story_from_component` | Generate Storybook stories ← React components |
+| `parse_story` | Extract metadata with regex parsing |
+| `parse_component` | Extract prop types from components |
+| `extract_story_props` | Get args and controls from stories |
+| `convert_story_to_component` | Convert stories → React components |
+| `generate_story_from_component` | Generate stories ← React components |
 
-#### 🆕 Sync Operations (NEW in v2.0!)
+#### Sync Operations (5 tools - v2.0)
 | Tool | Description |
 |------|-------------|
-| `validate_sync` | Check if component props and story args are in sync |
-| `sync_story_to_component` | Update component props to match story args |
-| `sync_component_to_story` | Update story args to match component props |
-| `bulk_sync_check` | Check sync status for all component/story pairs |
-| `find_and_replace` | Find and replace variables across multiple files |
+| `validate_sync` | Check if props and args match |
+| `sync_story_to_component` | Update component to match story |
+| `sync_component_to_story` | Update story to match component |
+| `bulk_sync_check` | Check sync for entire project |
+| `find_and_replace` | Replace variables across files |
+
+#### 🆕 AST & Advanced Parsing (1 tool - v3.0)
+| Tool | Description |
+|------|-------------|
+| `parse_with_ast` | Parse with TypeScript Compiler API (more accurate) |
+
+#### 🆕 Addon Management (1 tool - v3.0)
+| Tool | Description |
+|------|-------------|
+| `manage_addons` | List, add, remove, get recommendations for addons |
+
+#### 🆕 Test Generation (2 tools - v3.0)
+| Tool | Description |
+|------|-------------|
+| `generate_tests` | Generate unit/interaction/a11y tests |
+| `generate_play_function` | Generate Storybook play functions |
+
+#### 🆕 Interactive Editing (1 tool - v3.0)
+| Tool | Description |
+|------|-------------|
+| `edit_story_interactively` | Update args, clone stories, batch operations |
 
 ## Use Cases
 

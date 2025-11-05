@@ -16,11 +16,15 @@ import {
   syncComponentToStory,
   findAndReplaceInFile,
 } from "./storyParser.js";
+import { parseComponentAST, parseStoryAST, type ASTComponentInfo } from "./astParser.js";
+import { listAddons, addAddon, removeAddon, getRecommendedAddons, readStorybookConfig, POPULAR_ADDONS } from "./addonManager.js";
+import { generateUnitTest, generateInteractionTest, generatePlayFunction, generateDecorator, generateA11yTests } from "./testGenerator.js";
+import { updateStoryArgs, addStoryToFile, cloneStory, batchUpdateArgs } from "./interactiveEditor.js";
 
 // Initialize MCP server
 const server = new McpServer({
   name: "storybook-mcp-server",
-  version: "1.0.0",
+  version: "3.0.0",
 });
 
 /**
@@ -920,6 +924,260 @@ server.tool(
 );
 
 /**
+ * Tool: parse_with_ast
+ * Parse component or story using AST (more accurate than regex)
+ */
+server.tool(
+  "parse_with_ast",
+  {
+    filePath: z.string().describe("Path to file"),
+    type: z.enum(["component", "story"]).describe("File type to parse"),
+  },
+  async ({ filePath, type }) => {
+    try {
+      const absolutePath = path.resolve(filePath);
+      const result = type === "component"
+        ? await parseComponentAST(absolutePath)
+        : await parseStoryAST(absolutePath);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: true, parsed: result }, null, 2),
+        }],
+      };
+    } catch (error: any) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: false, error: error.message }),
+        }],
+      };
+    }
+  }
+);
+
+/**
+ * Tool: manage_addons
+ * Manage Storybook addons (list, add, remove)
+ */
+server.tool(
+  "manage_addons",
+  {
+    projectPath: z.string().describe("Project root directory"),
+    action: z.enum(["list", "add", "remove", "recommend"]).describe("Action to perform"),
+    addonName: z.string().optional().describe("Addon name (for add/remove)"),
+  },
+  async ({ projectPath, action, addonName }) => {
+    try {
+      const absolutePath = path.resolve(projectPath);
+
+      if (action === "list") {
+        const addons = await listAddons(absolutePath);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, addons }, null, 2),
+          }],
+        };
+      } else if (action === "recommend") {
+        const config = await readStorybookConfig(absolutePath);
+        const recommended = getRecommendedAddons(config);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, recommended, catalog: POPULAR_ADDONS }, null, 2),
+          }],
+        };
+      } else if (action === "add" && addonName) {
+        const result = await addAddon(absolutePath, addonName);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: result.success, message: result.message }, null, 2),
+          }],
+        };
+      } else if (action === "remove" && addonName) {
+        const result = await removeAddon(absolutePath, addonName);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: result.success, message: result.message }, null, 2),
+          }],
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: false, error: "Invalid action or missing addonName" }),
+        }],
+      };
+    } catch (error: any) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: false, error: error.message }),
+        }],
+      };
+    }
+  }
+);
+
+/**
+ * Tool: generate_tests
+ * Generate unit tests and accessibility tests for component
+ */
+server.tool(
+  "generate_tests",
+  {
+    componentPath: z.string().describe("Path to component"),
+    outputPath: z.string().optional().describe("Where to save test file"),
+    testType: z.enum(["unit", "interaction", "a11y", "all"]).default("unit").describe("Type of tests"),
+    framework: z.enum(["jest", "vitest"]).default("jest").describe("Test framework"),
+  },
+  async ({ componentPath, outputPath, testType, framework }) => {
+    try {
+      const absolutePath = path.resolve(componentPath);
+      const componentInfo = await parseComponentAST(absolutePath);
+
+      let testCode = "";
+
+      if (testType === "unit" || testType === "all") {
+        testCode += await generateUnitTest(absolutePath, componentInfo as ASTComponentInfo, {
+          testFramework: framework,
+          testingLibrary: "react-testing-library",
+          includeAccessibility: testType === "all",
+        });
+      }
+
+      if (testType === "a11y" || testType === "all") {
+        testCode += "\n\n" + generateA11yTests(componentInfo.name, componentInfo as ASTComponentInfo);
+      }
+
+      if (outputPath) {
+        const absoluteOutputPath = path.resolve(outputPath);
+        await fs.writeFile(absoluteOutputPath, testCode, "utf-8");
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            testCode,
+            savedTo: outputPath || null,
+          }, null, 2),
+        }],
+      };
+    } catch (error: any) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: false, error: error.message }),
+        }],
+      };
+    }
+  }
+);
+
+/**
+ * Tool: generate_play_function
+ * Generate Storybook play function for interaction testing
+ */
+server.tool(
+  "generate_play_function",
+  {
+    interactions: z.array(z.object({
+      action: z.string().describe("Action: click, type, clear, hover"),
+      target: z.string().describe("Target element role/label"),
+      value: z.string().optional().describe("Value for type action"),
+    })).describe("Array of interactions"),
+  },
+  async ({ interactions }) => {
+    try {
+      const playCode = generatePlayFunction(interactions);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: true, playCode }, null, 2),
+        }],
+      };
+    } catch (error: any) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: false, error: error.message }),
+        }],
+      };
+    }
+  }
+);
+
+/**
+ * Tool: edit_story_interactively
+ * Update story args, clone stories, batch updates
+ */
+server.tool(
+  "edit_story_interactively",
+  {
+    filePath: z.string().describe("Path to story file"),
+    action: z.enum(["update_args", "clone", "batch_update"]).describe("Edit action"),
+    storyName: z.string().optional().describe("Story name (for update_args, clone)"),
+    args: z.record(z.any()).optional().describe("Args to update/set"),
+    newStoryName: z.string().optional().describe("New story name (for clone)"),
+    updates: z.array(z.object({
+      storyName: z.string(),
+      args: z.record(z.any()),
+    })).optional().describe("Batch updates array"),
+  },
+  async ({ filePath, action, storyName, args, newStoryName, updates }) => {
+    try {
+      const absolutePath = path.resolve(filePath);
+
+      if (action === "update_args" && storyName && args) {
+        const result = await updateStoryArgs(absolutePath, storyName, args);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, updated: result.updated }, null, 2),
+          }],
+        };
+      } else if (action === "clone" && storyName && newStoryName) {
+        await cloneStory(absolutePath, storyName, newStoryName, args);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, cloned: newStoryName }, null, 2),
+          }],
+        };
+      } else if (action === "batch_update" && updates) {
+        const result = await batchUpdateArgs(absolutePath, updates);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, updated: result.updated }, null, 2),
+          }],
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: false, error: "Invalid action or missing parameters" }),
+        }],
+      };
+    } catch (error: any) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: false, error: error.message }),
+        }],
+      };
+    }
+  }
+);
+
+/**
  * Main function to start the MCP server
  */
 async function main() {
@@ -928,23 +1186,24 @@ async function main() {
 
   // Log to stderr so it doesn't interfere with MCP protocol
   console.error("Storybook MCP Server started successfully");
-  console.error("Version: 2.0.0");
+  console.error("Version: 3.0.0");
   console.error("Available tools:");
   console.error("  [Basic Operations]");
-  console.error("  - list_stories");
-  console.error("  - parse_story");
-  console.error("  - parse_component");
-  console.error("  - extract_story_props");
+  console.error("  - list_stories, parse_story, parse_component, extract_story_props");
   console.error("  [Generation]");
-  console.error("  - convert_story_to_component");
-  console.error("  - generate_story_from_component");
+  console.error("  - convert_story_to_component, generate_story_from_component");
   console.error("  [Sync Operations]");
-  console.error("  - validate_sync");
-  console.error("  - sync_story_to_component");
-  console.error("  - sync_component_to_story");
-  console.error("  - bulk_sync_check");
+  console.error("  - validate_sync, sync_story_to_component, sync_component_to_story, bulk_sync_check");
   console.error("  [Find & Replace]");
   console.error("  - find_and_replace");
+  console.error("  [AST Parsing (NEW v3.0)]");
+  console.error("  - parse_with_ast");
+  console.error("  [Addon Management (NEW v3.0)]");
+  console.error("  - manage_addons");
+  console.error("  [Test Generation (NEW v3.0)]");
+  console.error("  - generate_tests, generate_play_function");
+  console.error("  [Interactive Editing (NEW v3.0)]");
+  console.error("  - edit_story_interactively");
 }
 
 // Start the server
