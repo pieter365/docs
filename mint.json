@@ -69,6 +69,14 @@
       ]
     },
     {
+      "group": "Advanced",
+      "pages": [
+        "advanced/overview",
+        "advanced/storybook-mcp-quickstart",
+        "advanced/storybook-mcp-server"
+      ]
+    },
+    {
       "group": "API Documentation",
       "pages": [
         "api-reference/introduction"

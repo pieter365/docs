@@ -1,0 +1,718 @@
+---
+title: 'Building a Storybook MCP Server'
+description: 'Learn how to create a custom MCP server that converts Storybook stories to React components and vice versa'
+---
+
+## Overview
+
+This guide walks you through building a custom Model Context Protocol (MCP) server for Storybook integration. This server will enable Claude Code to:
+
+- Parse Storybook story files
+- Convert stories to standalone React components
+- Generate Storybook stories from React components
+- Extract component metadata and props
+- List and search stories in your project
+
+## What is MCP?
+
+The Model Context Protocol (MCP) is an open-source standard developed by Anthropic that enables AI systems to integrate with external tools and data sources. An MCP server exposes:
+
+- **Tools**: Callable functions that perform actions
+- **Resources**: Data sources that can be queried
+- **Prompts**: Pre-configured instruction templates
+
+## Architecture Design
+
+### Server Capabilities
+
+Our Storybook MCP server will provide the following tools:
+
+| Tool | Description |
+|------|-------------|
+| `parse_story` | Extract component metadata from a story file |
+| `convert_to_component` | Convert a Storybook story to a standalone React component |
+| `generate_story` | Generate a Storybook story from a React component |
+| `list_stories` | List all stories in the project |
+| `extract_props` | Extract prop types and controls from a story |
+
+### Resources
+
+The server will expose these resources:
+
+- Story files (*.stories.{js,jsx,ts,tsx})
+- Component metadata
+- Story configurations
+- Args and controls definitions
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+- Node.js 18+ installed
+- Basic understanding of TypeScript
+- A Storybook project to work with
+- Claude Code CLI installed
+
+## Installation
+
+### 1. Create Your Project
+
+```bash
+mkdir storybook-mcp-server
+cd storybook-mcp-server
+npm init -y
+```
+
+### 2. Install Dependencies
+
+```bash
+npm install @modelcontextprotocol/sdk zod
+npm install -D @types/node typescript tsx
+```
+
+### 3. Configure TypeScript
+
+Create a `tsconfig.json` file:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}
+```
+
+## Implementation
+
+### Server Setup
+
+Create `src/index.ts`:
+
+```typescript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import * as fs from "fs/promises";
+import * as path from "path";
+import { glob } from "glob";
+
+const server = new McpServer({
+  name: "storybook-mcp-server",
+  version: "1.0.0",
+});
+
+// Tool implementations will go here
+
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("Storybook MCP Server running on stdio");
+}
+
+main().catch(console.error);
+```
+
+### Tool 1: List Stories
+
+Add this tool to find all Storybook files in a project:
+
+```typescript
+server.tool(
+  "list_stories",
+  {
+    directory: z.string().describe("Project directory to search for stories"),
+    pattern: z.string().optional().default("**/*.stories.{js,jsx,ts,tsx}"),
+  },
+  async ({ directory, pattern }) => {
+    try {
+      const files = await glob(pattern, {
+        cwd: directory,
+        absolute: true,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              count: files.length,
+              stories: files.map(file => ({
+                path: file,
+                name: path.basename(file),
+                relativePath: path.relative(directory, file),
+              })),
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+```
+
+### Tool 2: Parse Story
+
+Extract metadata from a Storybook story file:
+
+```typescript
+server.tool(
+  "parse_story",
+  {
+    filePath: z.string().describe("Path to the story file"),
+  },
+  async ({ filePath }) => {
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+
+      // Extract component name from default export
+      const defaultExportMatch = content.match(/export\s+default\s+{\s*title:\s*['"]([^'"]+)['"]/);
+      const title = defaultExportMatch ? defaultExportMatch[1] : null;
+
+      // Extract story names
+      const storyMatches = content.matchAll(/export\s+const\s+(\w+)\s*=/g);
+      const stories = Array.from(storyMatches).map(match => match[1]);
+
+      // Extract component reference
+      const componentMatch = content.match(/component:\s*(\w+)/);
+      const component = componentMatch ? componentMatch[1] : null;
+
+      // Extract args
+      const argsMatch = content.match(/args:\s*{([^}]+)}/s);
+      let args = {};
+      if (argsMatch) {
+        try {
+          args = eval(`({${argsMatch[1]}})`);
+        } catch (e) {
+          // Complex args, return as string
+          args = { raw: argsMatch[1] };
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              metadata: {
+                title,
+                component,
+                stories,
+                args,
+                filePath,
+              },
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+```
+
+### Tool 3: Convert Story to Component
+
+Generate a standalone React component from a Storybook story:
+
+```typescript
+server.tool(
+  "convert_to_component",
+  {
+    filePath: z.string().describe("Path to the story file"),
+    storyName: z.string().describe("Name of the story to convert"),
+    outputPath: z.string().optional().describe("Output path for the component"),
+  },
+  async ({ filePath, storyName, outputPath }) => {
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+
+      // Extract the story definition
+      const storyRegex = new RegExp(
+        `export\\s+const\\s+${storyName}\\s*=\\s*{([^}]+)}`,
+        's'
+      );
+      const storyMatch = content.match(storyRegex);
+
+      if (!storyMatch) {
+        throw new Error(`Story "${storyName}" not found in ${filePath}`);
+      }
+
+      // Extract component name
+      const componentMatch = content.match(/component:\s*(\w+)/);
+      const componentName = componentMatch ? componentMatch[1] : 'Component';
+
+      // Parse args
+      const argsMatch = storyMatch[1].match(/args:\s*{([^}]+)}/s);
+      const args = argsMatch ? argsMatch[1] : '';
+
+      // Generate component code
+      const componentCode = `import React from 'react';
+import { ${componentName} } from './path-to-component';
+
+export const ${storyName}Component = () => {
+  return (
+    <${componentName}
+${args.split(',').map(arg => {
+  const [key, value] = arg.split(':').map(s => s.trim());
+  return `      ${key}={${value}}`;
+}).join('\n')}
+    />
+  );
+};
+
+export default ${storyName}Component;
+`;
+
+      // Write to file if output path provided
+      if (outputPath) {
+        await fs.writeFile(outputPath, componentCode, 'utf-8');
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              component: componentCode,
+              outputPath: outputPath || null,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+```
+
+### Tool 4: Generate Story from Component
+
+Create a Storybook story from a React component:
+
+```typescript
+server.tool(
+  "generate_story",
+  {
+    componentPath: z.string().describe("Path to the React component"),
+    componentName: z.string().describe("Name of the component"),
+    outputPath: z.string().optional().describe("Output path for the story"),
+  },
+  async ({ componentPath, componentName, outputPath }) => {
+    try {
+      const content = await fs.readFile(componentPath, "utf-8");
+
+      // Extract props (basic regex, could be enhanced with AST parsing)
+      const propsMatch = content.match(/interface\s+\w+Props\s*{([^}]+)}/s);
+      let props = [];
+
+      if (propsMatch) {
+        const propsContent = propsMatch[1];
+        const propMatches = propsContent.matchAll(/(\w+)(\?)?:\s*([^;]+)/g);
+        props = Array.from(propMatches).map(match => ({
+          name: match[1],
+          optional: !!match[2],
+          type: match[3].trim(),
+        }));
+      }
+
+      // Generate story code
+      const storyCode = `import type { Meta, StoryObj } from '@storybook/react';
+import { ${componentName} } from '${componentPath.replace(/\.tsx?$/, '')}';
+
+const meta: Meta<typeof ${componentName}> = {
+  title: 'Components/${componentName}',
+  component: ${componentName},
+  tags: ['autodocs'],
+  argTypes: {
+${props.map(prop => `    ${prop.name}: { control: 'text' },`).join('\n')}
+  },
+};
+
+export default meta;
+type Story = StoryObj<typeof ${componentName}>;
+
+export const Default: Story = {
+  args: {
+${props.filter(p => !p.optional).map(prop => `    ${prop.name}: '',`).join('\n')}
+  },
+};
+
+export const Example: Story = {
+  args: {
+${props.map(prop => `    ${prop.name}: 'Example ${prop.name}',`).join('\n')}
+  },
+};
+`;
+
+      // Write to file if output path provided
+      if (outputPath) {
+        await fs.writeFile(outputPath, storyCode, 'utf-8');
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              story: storyCode,
+              outputPath: outputPath || null,
+              detectedProps: props,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+```
+
+### Tool 5: Extract Props
+
+Extract prop types and controls from a story:
+
+```typescript
+server.tool(
+  "extract_props",
+  {
+    filePath: z.string().describe("Path to the story file"),
+  },
+  async ({ filePath }) => {
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+
+      // Extract argTypes
+      const argTypesMatch = content.match(/argTypes:\s*{([^}]+)}/s);
+      let argTypes = {};
+
+      if (argTypesMatch) {
+        const argTypesContent = argTypesMatch[1];
+        const argMatches = argTypesContent.matchAll(/(\w+):\s*{([^}]+)}/g);
+
+        for (const match of argMatches) {
+          const propName = match[1];
+          const propConfig = match[2];
+
+          argTypes[propName] = {
+            control: propConfig.match(/control:\s*['"]([^'"]+)['"]/)?.[1] || 'text',
+            description: propConfig.match(/description:\s*['"]([^'"]+)['"]/)?.[1] || '',
+          };
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              props: argTypes,
+              filePath,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+```
+
+## Building and Testing
+
+### Build the Server
+
+Add these scripts to your `package.json`:
+
+```json
+{
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  }
+}
+```
+
+Build the project:
+
+```bash
+npm run build
+```
+
+### Test the Server
+
+Create a test script `test-server.sh`:
+
+```bash
+#!/bin/bash
+
+echo '{"jsonrpc": "2.0", "method": "tools/list", "id": 1}' | node dist/index.js
+```
+
+Run it:
+
+```bash
+chmod +x test-server.sh
+./test-server.sh
+```
+
+## Integration with Claude Code
+
+### Configure the MCP Server
+
+Add the server to your Claude Code MCP configuration (`~/.config/claude/claude_desktop_config.json` or project `.claude/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "storybook": {
+      "command": "node",
+      "args": ["/path/to/storybook-mcp-server/dist/index.js"],
+      "env": {}
+    }
+  }
+}
+```
+
+### Using the Server with Claude Code
+
+Once configured, you can use natural language to interact with your Storybook:
+
+**List all stories:**
+```
+List all Storybook stories in the current project
+```
+
+**Convert a story to a component:**
+```
+Convert the "Primary" story from Button.stories.tsx to a standalone component
+```
+
+**Generate a story from a component:**
+```
+Create a Storybook story for the LoginForm component
+```
+
+**Extract props from a story:**
+```
+Show me all the props and controls defined in the Card story
+```
+
+## Advanced Features
+
+### Adding Resource Support
+
+You can enhance the server to expose stories as resources:
+
+```typescript
+server.resource(
+  "story://{path}",
+  async ({ path }) => {
+    const content = await fs.readFile(path, "utf-8");
+    return {
+      contents: [
+        {
+          uri: `story://${path}`,
+          mimeType: "text/plain",
+          text: content,
+        },
+      ],
+    };
+  }
+);
+```
+
+### Adding Prompts
+
+Create reusable prompts for common tasks:
+
+```typescript
+server.prompt(
+  "migrate-story-format",
+  {
+    filePath: z.string(),
+  },
+  async ({ filePath }) => {
+    return {
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Migrate the Storybook story at ${filePath} from CSF2 to CSF3 format. Ensure all args, argTypes, and decorators are properly converted.`,
+          },
+        },
+      ],
+    };
+  }
+);
+```
+
+## Deployment
+
+### Local Installation
+
+For local use, you can install the server globally:
+
+```bash
+npm link
+```
+
+Then reference it in your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "storybook": {
+      "command": "storybook-mcp-server"
+    }
+  }
+}
+```
+
+### Remote Deployment
+
+For remote access, deploy using Streamable HTTP transport:
+
+```typescript
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/http.js";
+
+const transport = new StreamableHTTPServerTransport({
+  port: 3000,
+});
+
+await server.connect(transport);
+```
+
+Then configure in Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "storybook": {
+      "url": "http://localhost:3000"
+    }
+  }
+}
+```
+
+## Best Practices
+
+1. **Error Handling**: Always wrap tool implementations in try-catch blocks
+2. **Validation**: Use Zod schemas to validate all inputs
+3. **Security**: Never execute arbitrary code from story files
+4. **Performance**: Cache parsed story metadata for large projects
+5. **Testing**: Create integration tests for each tool
+6. **Documentation**: Keep tool descriptions clear and concise
+
+## Troubleshooting
+
+### Server Won't Start
+
+- Check that all dependencies are installed
+- Verify TypeScript compilation succeeded
+- Ensure the path in MCP config is correct
+
+### Tools Not Appearing
+
+- Restart Claude Code after updating MCP config
+- Check server logs for errors
+- Verify the server is using stdio transport
+
+### Parse Errors
+
+- Ensure story files use standard Storybook formats
+- Check for syntax errors in the story files
+- Consider using AST parsing instead of regex for complex files
+
+## Next Steps
+
+- Enhance parsing with AST tools like Babel or TypeScript compiler API
+- Add support for Storybook addons
+- Implement caching for better performance
+- Create automated tests
+- Add support for Vue, Angular, and other frameworks
+
+## Resources
+
+- [Model Context Protocol Specification](https://modelcontextprotocol.io/specification)
+- [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+- [Storybook Documentation](https://storybook.js.org/docs)
+- [Claude Code MCP Guide](https://docs.claude.com/en/docs/claude-code/mcp)
+
+## Conclusion
+
+You now have a fully functional MCP server that bridges Storybook and Claude Code. This enables AI-assisted component development, automated story generation, and seamless conversion between stories and components.
+
+The patterns shown here can be adapted for other tools and workflows, making MCP a powerful extension mechanism for Claude Code.

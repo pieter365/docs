@@ -1,0 +1,204 @@
+---
+title: 'Storybook MCP Server - Quick Start'
+description: 'Get started with the Storybook MCP server in under 10 minutes'
+---
+
+## What You'll Build
+
+A custom MCP server that enables Claude Code to work seamlessly with your Storybook project, converting stories to components and vice versa.
+
+## Prerequisites
+
+- Node.js 18+
+- A Storybook project
+- Claude Code installed
+
+## Quick Setup
+
+### 1. Create the Project
+
+```bash
+mkdir storybook-mcp-server && cd storybook-mcp-server
+npm init -y
+npm install @modelcontextprotocol/sdk zod glob
+npm install -D typescript tsx @types/node
+```
+
+### 2. Configure TypeScript
+
+Create `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true
+  }
+}
+```
+
+### 3. Create the Server
+
+Create `src/index.ts`:
+
+```typescript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import * as fs from "fs/promises";
+import { glob } from "glob";
+
+const server = new McpServer({
+  name: "storybook-mcp-server",
+  version: "1.0.0",
+});
+
+// List all story files
+server.tool(
+  "list_stories",
+  {
+    directory: z.string().describe("Project directory"),
+    pattern: z.string().optional().default("**/*.stories.{js,jsx,ts,tsx}"),
+  },
+  async ({ directory, pattern }) => {
+    const files = await glob(pattern, { cwd: directory, absolute: true });
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({ count: files.length, stories: files }, null, 2),
+      }],
+    };
+  }
+);
+
+// Parse story metadata
+server.tool(
+  "parse_story",
+  {
+    filePath: z.string().describe("Path to story file"),
+  },
+  async ({ filePath }) => {
+    const content = await fs.readFile(filePath, "utf-8");
+    const titleMatch = content.match(/title:\s*['"]([^'"]+)['"]/);
+    const componentMatch = content.match(/component:\s*(\w+)/);
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          title: titleMatch?.[1],
+          component: componentMatch?.[1],
+          path: filePath,
+        }, null, 2),
+      }],
+    };
+  }
+);
+
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("Storybook MCP Server running");
+}
+
+main().catch(console.error);
+```
+
+### 4. Build
+
+Add to `package.json`:
+
+```json
+{
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts"
+  }
+}
+```
+
+Run:
+
+```bash
+npm run build
+```
+
+### 5. Configure Claude Code
+
+Add to `.claude/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "storybook": {
+      "command": "node",
+      "args": ["/absolute/path/to/storybook-mcp-server/dist/index.js"]
+    }
+  }
+}
+```
+
+## Test It
+
+Start Claude Code in your Storybook project:
+
+```bash
+claude
+```
+
+Try these commands:
+
+```
+List all Storybook stories in the current project
+```
+
+```
+Parse the Button.stories.tsx file and show me its metadata
+```
+
+## Next Steps
+
+- [Full Implementation Guide](/advanced/storybook-mcp-server) - Complete guide with all tools
+- Add more tools (convert, generate, extract)
+- Deploy as a remote server
+- Integrate with your CI/CD pipeline
+
+## Example Usage
+
+Once running, Claude Code can help with:
+
+**Story to Component:**
+> "Convert the Primary button story to a standalone React component and save it as PrimaryButton.tsx"
+
+**Component to Story:**
+> "Create a Storybook story for my LoginForm component"
+
+**Bulk Operations:**
+> "List all stories, then generate documentation for each one"
+
+## Troubleshooting
+
+**Server not found:**
+- Use absolute paths in MCP config
+- Restart Claude Code after config changes
+
+**Permission errors:**
+- Ensure the build output is readable
+- Check file permissions on dist/index.js
+
+**Tools not showing:**
+- Verify the server starts without errors
+- Check logs with `npm run dev`
+
+## Complete Example Repository
+
+For the full implementation with all features, see:
+- [Full Guide](/advanced/storybook-mcp-server)
+- Example repository: [github.com/your-org/storybook-mcp-server](#)
+
+You're now ready to use Claude Code with your Storybook project!
