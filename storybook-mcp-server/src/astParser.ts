@@ -1,10 +1,18 @@
 import * as ts from "typescript";
 import * as fs from "fs/promises";
+import { getCache } from "./cacheManager.js";
 
 /**
  * AST-based parser using TypeScript Compiler API
  * More robust than regex parsing
+ * Now with intelligent caching for large projects
  */
+
+const cache = getCache({
+  ttl: 10 * 60 * 1000, // 10 minutes for AST parsing
+  maxMemoryEntries: 500,
+  enableFileWatching: true,
+});
 
 export interface ASTComponentInfo {
   name: string;
@@ -35,9 +43,20 @@ export interface ASTStoryInfo {
 }
 
 /**
- * Parse a TypeScript/React component file using AST
+ * Parse a TypeScript/React component file using AST (with caching)
  */
 export async function parseComponentAST(filePath: string): Promise<ASTComponentInfo> {
+  return cache.get(
+    `component:${filePath}`,
+    async () => parseComponentASTUncached(filePath),
+    filePath
+  );
+}
+
+/**
+ * Internal: Parse component without cache
+ */
+async function parseComponentASTUncached(filePath: string): Promise<ASTComponentInfo> {
   const sourceCode = await fs.readFile(filePath, "utf-8");
   const sourceFile = ts.createSourceFile(
     filePath,
@@ -129,9 +148,20 @@ export async function parseComponentAST(filePath: string): Promise<ASTComponentI
 }
 
 /**
- * Parse a Storybook story file using AST
+ * Parse a Storybook story file using AST (with caching)
  */
 export async function parseStoryAST(filePath: string): Promise<ASTStoryInfo> {
+  return cache.get(
+    `story:${filePath}`,
+    async () => parseStoryASTUncached(filePath),
+    filePath
+  );
+}
+
+/**
+ * Internal: Parse story without cache
+ */
+async function parseStoryASTUncached(filePath: string): Promise<ASTStoryInfo> {
   const sourceCode = await fs.readFile(filePath, "utf-8");
   const sourceFile = ts.createSourceFile(
     filePath,
