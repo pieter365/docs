@@ -20,6 +20,7 @@ import { parseComponentAST, parseStoryAST, type ASTComponentInfo } from "./astPa
 import { listAddons, addAddon, removeAddon, getRecommendedAddons, readStorybookConfig, POPULAR_ADDONS } from "./addonManager.js";
 import { generateUnitTest, generateInteractionTest, generatePlayFunction, generateDecorator, generateA11yTests } from "./testGenerator.js";
 import { updateStoryArgs, addStoryToFile, cloneStory, batchUpdateArgs } from "./interactiveEditor.js";
+import { getCache } from "./cacheManager.js";
 
 // Initialize MCP server
 const server = new McpServer({
@@ -1178,6 +1179,71 @@ server.tool(
 );
 
 /**
+ * Tool: manage_cache
+ * Manage cache for performance in large projects
+ */
+server.tool(
+  "manage_cache",
+  {
+    action: z.enum(["stats", "clear", "cleanup", "invalidate"]).describe("Cache action"),
+    pattern: z.string().optional().describe("Pattern for selective invalidation"),
+  },
+  async ({ action, pattern }) => {
+    try {
+      const cache = getCache();
+
+      if (action === "stats") {
+        const stats = await cache.getStats();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, stats }, null, 2),
+          }],
+        };
+      } else if (action === "clear") {
+        await cache.clear();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, message: "Cache cleared" }),
+          }],
+        };
+      } else if (action === "cleanup") {
+        const cleaned = await cache.cleanup();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, cleaned, message: `Cleaned ${cleaned} expired entries` }),
+          }],
+        };
+      } else if (action === "invalidate" && pattern) {
+        const count = await cache.invalidatePattern(pattern);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, invalidated: count, pattern }),
+          }],
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: false, error: "Invalid action or missing pattern" }),
+        }],
+      };
+    } catch (error: any) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: false, error: error.message }),
+        }],
+      };
+    }
+  }
+);
+
+/**
  * Main function to start the MCP server
  */
 async function main() {
@@ -1186,7 +1252,7 @@ async function main() {
 
   // Log to stderr so it doesn't interfere with MCP protocol
   console.error("Storybook MCP Server started successfully");
-  console.error("Version: 3.0.0");
+  console.error("Version: 3.1.0");
   console.error("Available tools:");
   console.error("  [Basic Operations]");
   console.error("  - list_stories, parse_story, parse_component, extract_story_props");
@@ -1196,14 +1262,16 @@ async function main() {
   console.error("  - validate_sync, sync_story_to_component, sync_component_to_story, bulk_sync_check");
   console.error("  [Find & Replace]");
   console.error("  - find_and_replace");
-  console.error("  [AST Parsing (NEW v3.0)]");
+  console.error("  [AST Parsing (v3.0)]");
   console.error("  - parse_with_ast");
-  console.error("  [Addon Management (NEW v3.0)]");
+  console.error("  [Addon Management (v3.0)]");
   console.error("  - manage_addons");
-  console.error("  [Test Generation (NEW v3.0)]");
+  console.error("  [Test Generation (v3.0)]");
   console.error("  - generate_tests, generate_play_function");
-  console.error("  [Interactive Editing (NEW v3.0)]");
+  console.error("  [Interactive Editing (v3.0)]");
   console.error("  - edit_story_interactively");
+  console.error("  [Cache Management (NEW v3.1)]");
+  console.error("  - manage_cache");
 }
 
 // Start the server
