@@ -2,6 +2,17 @@
 
 A Model Context Protocol (MCP) server that enables AI assistants like Claude Code to seamlessly work with Storybook stories and React components.
 
+## 🎉 What's New in v2.0
+
+**AUTO-SYNC & VARIABLE UPDATES!** The server now automatically keeps your components and stories in sync:
+
+- ✅ **Validate sync** - Check if component props match story args
+- ✅ **Auto-update** - Sync props from story → component or component → story
+- ✅ **Find & replace** - Update variables across all files
+- ✅ **Bulk operations** - Check sync status for entire projects
+
+👉 **[See all new features →](storybook-mcp-server/WHATS-NEW-V2.md)**
+
 ## What is This?
 
 This repository contains a fully functional MCP server that bridges the gap between Storybook and React development. It allows Claude Code CLI to:
@@ -10,6 +21,8 @@ This repository contains a fully functional MCP server that bridges the gap betw
 - 🔄 **Convert stories** to standalone React components
 - ✨ **Generate stories** from React components automatically
 - 🔍 **Extract metadata** about components, props, and controls
+- 🔁 **AUTO-SYNC** props between components and stories (v2.0!)
+- 🔎 **Find and replace** variables across multiple files (v2.0!)
 - 🚀 **Automate workflows** like bulk story generation and validation
 
 ## Quick Start
@@ -62,16 +75,26 @@ Generate a Storybook story for the LoginForm component
 
 ## Features
 
-### 6 Powerful Tools
+### 11 Powerful Tools (v2.0)
 
+#### Basic Operations
 | Tool | Description |
 |------|-------------|
 | `list_stories` | Find all Storybook story files in a project |
 | `parse_story` | Extract metadata, component references, args, and argTypes |
-| `convert_story_to_component` | Convert Storybook stories → standalone React components |
-| `generate_story_from_component` | Generate Storybook stories ← React components |
 | `parse_component` | Extract prop types and component information |
 | `extract_story_props` | Get args and controls from story files |
+| `convert_story_to_component` | Convert Storybook stories → standalone React components |
+| `generate_story_from_component` | Generate Storybook stories ← React components |
+
+#### 🆕 Sync Operations (NEW in v2.0!)
+| Tool | Description |
+|------|-------------|
+| `validate_sync` | Check if component props and story args are in sync |
+| `sync_story_to_component` | Update component props to match story args |
+| `sync_component_to_story` | Update story args to match component props |
+| `bulk_sync_check` | Check sync status for all component/story pairs |
+| `find_and_replace` | Find and replace variables across multiple files |
 
 ## Use Cases
 

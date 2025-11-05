@@ -11,6 +11,10 @@ import {
   parseComponentFile,
   convertStoryToComponent,
   generateStoryFromComponent,
+  comparePropSync,
+  syncStoryToComponent,
+  syncComponentToStory,
+  findAndReplaceInFile,
 } from "./storyParser.js";
 
 // Initialize MCP server
@@ -463,6 +467,459 @@ server.tool(
 );
 
 /**
+ * Tool: validate_sync
+ * Checks if a component and its story are in sync
+ */
+server.tool(
+  "validate_sync",
+  {
+    componentPath: z.string().describe("Absolute path to the React component file"),
+    storyPath: z.string().describe("Absolute path to the story file"),
+  },
+  async ({ componentPath, storyPath }) => {
+    try {
+      const absoluteComponentPath = path.resolve(componentPath);
+      const absoluteStoryPath = path.resolve(storyPath);
+
+      // Check if files exist
+      try {
+        await fs.access(absoluteComponentPath);
+        await fs.access(absoluteStoryPath);
+      } catch {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: `File not found: ${absoluteComponentPath} or ${absoluteStoryPath}`,
+              }),
+            },
+          ],
+        };
+      }
+
+      const syncStatus = await comparePropSync(absoluteComponentPath, absoluteStoryPath);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: true,
+                syncStatus,
+                recommendation: syncStatus.inSync
+                  ? "Component and story are in sync"
+                  : "Sync issues detected. Use sync_story_to_component or sync_component_to_story to fix.",
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+              stack: error.stack,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+
+/**
+ * Tool: sync_story_to_component
+ * Updates a component's props to match its story args
+ */
+server.tool(
+  "sync_story_to_component",
+  {
+    componentPath: z.string().describe("Absolute path to the React component file to update"),
+    storyPath: z.string().describe("Absolute path to the story file (source of truth)"),
+  },
+  async ({ componentPath, storyPath }) => {
+    try {
+      const absoluteComponentPath = path.resolve(componentPath);
+      const absoluteStoryPath = path.resolve(storyPath);
+
+      // Check if files exist
+      try {
+        await fs.access(absoluteComponentPath);
+        await fs.access(absoluteStoryPath);
+      } catch {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: `File not found: ${absoluteComponentPath} or ${absoluteStoryPath}`,
+              }),
+            },
+          ],
+        };
+      }
+
+      const result = await syncStoryToComponent(absoluteComponentPath, absoluteStoryPath);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: true,
+                updated: result.updated,
+                changes: result.changes,
+                message: result.updated
+                  ? `Component updated with ${result.changes.length} changes`
+                  : "No changes needed - already in sync",
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+              stack: error.stack,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+
+/**
+ * Tool: sync_component_to_story
+ * Updates a story's args to match its component props
+ */
+server.tool(
+  "sync_component_to_story",
+  {
+    componentPath: z.string().describe("Absolute path to the React component file (source of truth)"),
+    storyPath: z.string().describe("Absolute path to the story file to update"),
+    storyName: z
+      .string()
+      .optional()
+      .default("Default")
+      .describe("Name of the story to update (defaults to 'Default')"),
+  },
+  async ({ componentPath, storyPath, storyName }) => {
+    try {
+      const absoluteComponentPath = path.resolve(componentPath);
+      const absoluteStoryPath = path.resolve(storyPath);
+
+      // Check if files exist
+      try {
+        await fs.access(absoluteComponentPath);
+        await fs.access(absoluteStoryPath);
+      } catch {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: `File not found: ${absoluteComponentPath} or ${absoluteStoryPath}`,
+              }),
+            },
+          ],
+        };
+      }
+
+      const result = await syncComponentToStory(
+        absoluteComponentPath,
+        absoluteStoryPath,
+        storyName || "Default"
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: true,
+                updated: result.updated,
+                changes: result.changes,
+                storyName: storyName || "Default",
+                message: result.updated
+                  ? `Story '${storyName}' updated with ${result.changes.length} changes`
+                  : "No changes needed - already in sync",
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+              stack: error.stack,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+
+/**
+ * Tool: find_and_replace
+ * Find and replace a variable/prop across story and component files
+ */
+server.tool(
+  "find_and_replace",
+  {
+    files: z.array(z.string()).describe("Array of file paths to search and replace in"),
+    findValue: z.string().describe("The value to find"),
+    replaceValue: z.string().describe("The value to replace with"),
+    scope: z
+      .enum(["propName", "propValue", "all"])
+      .optional()
+      .default("all")
+      .describe("Scope: 'propName' (prop names only), 'propValue' (values only), or 'all'"),
+  },
+  async ({ files, findValue, replaceValue, scope }) => {
+    try {
+      const results: Array<{
+        file: string;
+        updated: boolean;
+        occurrences: number;
+      }> = [];
+
+      let totalOccurrences = 0;
+      let filesUpdated = 0;
+
+      for (const filePath of files) {
+        const absolutePath = path.resolve(filePath);
+
+        try {
+          await fs.access(absolutePath);
+          const result = await findAndReplaceInFile(
+            absolutePath,
+            findValue,
+            replaceValue,
+            scope || "all"
+          );
+
+          results.push({
+            file: filePath,
+            updated: result.updated,
+            occurrences: result.occurrences,
+          });
+
+          totalOccurrences += result.occurrences;
+          if (result.updated) filesUpdated++;
+        } catch (error: any) {
+          results.push({
+            file: filePath,
+            updated: false,
+            occurrences: 0,
+          });
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: true,
+                summary: {
+                  filesProcessed: files.length,
+                  filesUpdated,
+                  totalOccurrences,
+                  findValue,
+                  replaceValue,
+                  scope: scope || "all",
+                },
+                results,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+              stack: error.stack,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+
+/**
+ * Tool: bulk_sync_check
+ * Check sync status for all component/story pairs in a directory
+ */
+server.tool(
+  "bulk_sync_check",
+  {
+    directory: z.string().describe("Project directory to search"),
+  },
+  async ({ directory }) => {
+    try {
+      const absoluteDir = path.resolve(directory);
+
+      // Find all story files
+      const storyFiles = await glob("**/*.stories.{js,jsx,ts,tsx}", {
+        cwd: absoluteDir,
+        absolute: true,
+        ignore: ["**/node_modules/**", "**/dist/**", "**/build/**"],
+      });
+
+      const results: Array<{
+        storyFile: string;
+        componentFile: string | null;
+        inSync: boolean;
+        issues: string[];
+      }> = [];
+
+      for (const storyFile of storyFiles) {
+        // Try to find corresponding component file
+        const baseName = path.basename(storyFile).replace(/\.stories\.(tsx?|jsx?)$/, "");
+        const storyDir = path.dirname(storyFile);
+
+        // Look for component in same directory or parent
+        const possiblePaths = [
+          path.join(storyDir, `${baseName}.tsx`),
+          path.join(storyDir, `${baseName}.ts`),
+          path.join(storyDir, `${baseName}.jsx`),
+          path.join(storyDir, `${baseName}.js`),
+          path.join(storyDir, "..", "components", `${baseName}.tsx`),
+          path.join(storyDir, "..", "components", `${baseName}.ts`),
+        ];
+
+        let componentFile: string | null = null;
+        for (const possiblePath of possiblePaths) {
+          try {
+            await fs.access(possiblePath);
+            componentFile = possiblePath;
+            break;
+          } catch {
+            // Continue searching
+          }
+        }
+
+        if (componentFile) {
+          try {
+            const syncStatus = await comparePropSync(componentFile, storyFile);
+            const issues: string[] = [];
+
+            if (syncStatus.missingInStory.length > 0) {
+              issues.push(`Missing in story: ${syncStatus.missingInStory.join(", ")}`);
+            }
+            if (syncStatus.missingInComponent.length > 0) {
+              issues.push(`Missing in component: ${syncStatus.missingInComponent.join(", ")}`);
+            }
+            if (syncStatus.typeMismatches.length > 0) {
+              issues.push(
+                `Type mismatches: ${syncStatus.typeMismatches.map((m) => m.prop).join(", ")}`
+              );
+            }
+
+            results.push({
+              storyFile: path.relative(absoluteDir, storyFile),
+              componentFile: path.relative(absoluteDir, componentFile),
+              inSync: syncStatus.inSync,
+              issues,
+            });
+          } catch (error: any) {
+            results.push({
+              storyFile: path.relative(absoluteDir, storyFile),
+              componentFile: path.relative(absoluteDir, componentFile),
+              inSync: false,
+              issues: [`Error checking sync: ${error.message}`],
+            });
+          }
+        } else {
+          results.push({
+            storyFile: path.relative(absoluteDir, storyFile),
+            componentFile: null,
+            inSync: false,
+            issues: ["Component file not found"],
+          });
+        }
+      }
+
+      const summary = {
+        total: results.length,
+        inSync: results.filter((r) => r.inSync).length,
+        outOfSync: results.filter((r) => !r.inSync).length,
+        missingComponents: results.filter((r) => r.componentFile === null).length,
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: true,
+                summary,
+                results: results.filter((r) => !r.inSync), // Only show problems
+                allResults: results, // Full list for reference
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error.message,
+              stack: error.stack,
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
+
+/**
  * Main function to start the MCP server
  */
 async function main() {
@@ -471,14 +928,23 @@ async function main() {
 
   // Log to stderr so it doesn't interfere with MCP protocol
   console.error("Storybook MCP Server started successfully");
-  console.error("Version: 1.0.0");
+  console.error("Version: 2.0.0");
   console.error("Available tools:");
+  console.error("  [Basic Operations]");
   console.error("  - list_stories");
   console.error("  - parse_story");
-  console.error("  - convert_story_to_component");
-  console.error("  - generate_story_from_component");
   console.error("  - parse_component");
   console.error("  - extract_story_props");
+  console.error("  [Generation]");
+  console.error("  - convert_story_to_component");
+  console.error("  - generate_story_from_component");
+  console.error("  [Sync Operations]");
+  console.error("  - validate_sync");
+  console.error("  - sync_story_to_component");
+  console.error("  - sync_component_to_story");
+  console.error("  - bulk_sync_check");
+  console.error("  [Find & Replace]");
+  console.error("  - find_and_replace");
 }
 
 // Start the server

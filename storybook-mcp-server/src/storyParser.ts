@@ -307,3 +307,223 @@ ${exampleArgsContent || "    // Add example args"}
 };
 `;
 }
+
+/**
+ * Compare component props with story args to check sync status
+ */
+export interface SyncStatus {
+  inSync: boolean;
+  missingInStory: string[];
+  missingInComponent: string[];
+  typeMismatches: Array<{ prop: string; componentType: string; storyValue: string }>;
+}
+
+export async function comparePropSync(
+  componentPath: string,
+  storyPath: string
+): Promise<SyncStatus> {
+  const componentInfo = await parseComponentFile(componentPath);
+  const storyMetadata = await parseStoryFile(storyPath);
+
+  const componentPropNames = new Set(componentInfo.props.map((p) => p.name));
+  const storyArgNames = new Set(Object.keys(storyMetadata.args));
+
+  const missingInStory = componentInfo.props
+    .filter((p) => !storyArgNames.has(p.name) && !p.optional)
+    .map((p) => p.name);
+
+  const missingInComponent = Object.keys(storyMetadata.args).filter(
+    (arg) => !componentPropNames.has(arg)
+  );
+
+  const typeMismatches: SyncStatus["typeMismatches"] = [];
+  // Simple type checking - could be enhanced
+  for (const prop of componentInfo.props) {
+    if (storyMetadata.args[prop.name]) {
+      const storyValue = storyMetadata.args[prop.name];
+      // Basic type mismatch detection
+      if (prop.type.includes("number") && !storyValue.match(/^\d+$/)) {
+        typeMismatches.push({
+          prop: prop.name,
+          componentType: prop.type,
+          storyValue,
+        });
+      }
+    }
+  }
+
+  return {
+    inSync: missingInStory.length === 0 && missingInComponent.length === 0 && typeMismatches.length === 0,
+    missingInStory,
+    missingInComponent,
+    typeMismatches,
+  };
+}
+
+/**
+ * Update component file to match story args
+ */
+export async function syncStoryToComponent(
+  componentPath: string,
+  storyPath: string
+): Promise<{ updated: boolean; changes: string[] }> {
+  const componentInfo = await parseComponentFile(componentPath);
+  const storyMetadata = await parseStoryFile(storyPath);
+
+  let content = await fs.readFile(componentPath, "utf-8");
+  const changes: string[] = [];
+
+  // Find props interface/type
+  const propsMatch = content.match(/(?:interface|type)\s+(\w*Props)\s*{([^}]+)}/s);
+
+  if (!propsMatch) {
+    throw new Error(`Could not find props interface in ${componentPath}`);
+  }
+
+  const interfaceName = propsMatch[1];
+  const existingProps = propsMatch[2];
+
+  // Build new props based on story args
+  const newProps: string[] = [];
+  const existingPropNames = componentInfo.props.map((p) => p.name);
+
+  // Keep existing props
+  componentInfo.props.forEach((prop) => {
+    if (storyMetadata.args[prop.name]) {
+      newProps.push(`  ${prop.name}${prop.optional ? "?" : ""}: ${prop.type};`);
+    } else if (prop.optional) {
+      newProps.push(`  ${prop.name}?: ${prop.type};`);
+    } else {
+      // Required prop not in story - keep it but note the change
+      newProps.push(`  ${prop.name}: ${prop.type};`);
+      changes.push(`Kept required prop '${prop.name}' not found in story`);
+    }
+  });
+
+  // Add new props from story
+  Object.keys(storyMetadata.args).forEach((argName) => {
+    if (!existingPropNames.includes(argName)) {
+      // Infer type from story value
+      const value = storyMetadata.args[argName];
+      let inferredType = "any";
+      if (value.match(/^['"`]/)) inferredType = "string";
+      else if (value.match(/^\d+$/)) inferredType = "number";
+      else if (value.match(/^(true|false)$/)) inferredType = "boolean";
+      else if (value.match(/^\[/)) inferredType = "any[]";
+      else if (value.match(/^\(/)) inferredType = "() => void";
+
+      newProps.push(`  ${argName}?: ${inferredType};`);
+      changes.push(`Added new prop '${argName}' from story with type '${inferredType}'`);
+    }
+  });
+
+  if (changes.length > 0) {
+    // Replace the interface
+    const newInterface = `${interfaceName} {\n${newProps.join("\n")}\n}`;
+    const newContent = content.replace(
+      /(?:interface|type)\s+\w*Props\s*{[^}]+}/s,
+      newInterface
+    );
+
+    await fs.writeFile(componentPath, newContent, "utf-8");
+    return { updated: true, changes };
+  }
+
+  return { updated: false, changes: [] };
+}
+
+/**
+ * Update story args to match component props
+ */
+export async function syncComponentToStory(
+  componentPath: string,
+  storyPath: string,
+  storyName: string = "Default"
+): Promise<{ updated: boolean; changes: string[] }> {
+  const componentInfo = await parseComponentFile(componentPath);
+  let content = await fs.readFile(storyPath, "utf-8");
+  const changes: string[] = [];
+
+  // Generate args for all component props
+  const generateExampleValue = (type: string): string => {
+    if (type.includes("string")) return "'Example text'";
+    if (type.includes("number")) return "42";
+    if (type.includes("boolean")) return "true";
+    if (type.includes("[]") || type.includes("Array")) return "[]";
+    if (type.includes("{}") || type.includes("object")) return "{}";
+    if (type.includes("()") || type.includes("Function")) return "() => {}";
+    return "'value'";
+  };
+
+  const newArgs = componentInfo.props
+    .map((prop) => {
+      const value = prop.defaultValue || generateExampleValue(prop.type);
+      changes.push(`Set '${prop.name}' to ${value}`);
+      return `    ${prop.name}: ${value}`;
+    })
+    .join(",\n");
+
+  // Find and replace the story args
+  const storyRegex = new RegExp(
+    `export\\s+const\\s+${storyName}\\s*:\\s*Story\\s*=\\s*{([\\s\\S]*?)}\\s*;`,
+    "m"
+  );
+
+  const storyMatch = content.match(storyRegex);
+
+  if (storyMatch) {
+    const newStoryContent = `export const ${storyName}: Story = {
+  args: {
+${newArgs}
+  },
+};`;
+
+    const newContent = content.replace(storyRegex, newStoryContent);
+    await fs.writeFile(storyPath, newContent, "utf-8");
+
+    return { updated: true, changes };
+  }
+
+  return { updated: false, changes: [] };
+}
+
+/**
+ * Find and replace a variable/prop across multiple files
+ */
+export async function findAndReplaceInFile(
+  filePath: string,
+  findValue: string,
+  replaceValue: string,
+  scope: "propName" | "propValue" | "all" = "all"
+): Promise<{ updated: boolean; occurrences: number }> {
+  let content = await fs.readFile(filePath, "utf-8");
+  let occurrences = 0;
+  let newContent = content;
+
+  if (scope === "propName" || scope === "all") {
+    // Replace prop names (in interfaces, args, etc.)
+    const propNameRegex = new RegExp(`\\b${findValue}\\b`, "g");
+    const matches = content.match(propNameRegex);
+    if (matches) {
+      occurrences += matches.length;
+      newContent = newContent.replace(propNameRegex, replaceValue);
+    }
+  }
+
+  if (scope === "propValue" || scope === "all") {
+    // Replace prop values (in args, default values, etc.)
+    const propValueRegex = new RegExp(`:\\s*['"\`]${findValue}['"\`]`, "g");
+    const valueMatches = content.match(propValueRegex);
+    if (valueMatches) {
+      occurrences += valueMatches.length;
+      newContent = newContent.replace(propValueRegex, `: '${replaceValue}'`);
+    }
+  }
+
+  if (newContent !== content) {
+    await fs.writeFile(filePath, newContent, "utf-8");
+    return { updated: true, occurrences };
+  }
+
+  return { updated: false, occurrences: 0 };
+}
